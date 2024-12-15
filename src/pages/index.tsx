@@ -1,114 +1,242 @@
-import Image from "next/image";
-import { Geist, Geist_Mono } from "next/font/google";
+import { useEffect, useRef, useState } from "react";
+import styles from "@/styles/FlappyBird.module.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
+const GRAVITY = 0.5;
+const JUMP_FORCE = -8;
+const PIPE_SPEED = 2;
+const PIPE_SPAWN_INTERVAL = 2000;
+const PIPE_GAP = 150;
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+interface Bird {
+  y: number;
+  velocity: number;
+}
 
-export default function Home() {
+interface Pipe {
+  x: number;
+  height: number;
+  id: number;
+  passed?: boolean;
+}
+
+const FlappyBird = () => {
+  const [gameStarted, setGameStarted] = useState(false);
+  const [gameOver, setGameOver] = useState(false);
+  const [score, setScore] = useState(0);
+  const [bird, setBird] = useState<Bird>({ y: 250, velocity: 0 });
+  const [pipes, setPipes] = useState<Pipe[]>([]);
+  const gameLoopRef = useRef<number>();
+  const lastPipeSpawnRef = useRef<number>(0);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Load images
+  useEffect(() => {
+    const birdImg = new Image();
+    birdImg.src = "/flappy_bird/sprites/bluebird-midflap.png";
+    const pipeImg = new Image();
+    pipeImg.src = "/flappy_bird/sprites/pipe-green.png";
+    const bgImg = new Image();
+    bgImg.src = "/flappy_bird/sprites/background-day.png";
+    const baseImg = new Image();
+    baseImg.src = "/flappy_bird/sprites/base.png";
+  }, []);
+
+  const jump = () => {
+    if (!gameStarted) {
+      setGameStarted(true);
+    }
+    if (!gameOver) {
+      setBird((prev) => ({ ...prev, velocity: JUMP_FORCE }));
+    }
+  };
+
+  const spawnPipe = () => {
+    const height = Math.random() * (300 - 100) + 100;
+    setPipes((prev) => [
+      ...prev,
+      {
+        x: 800,
+        height,
+        id: Date.now(),
+      },
+    ]);
+  };
+
+  const checkCollision = (birdY: number, pipes: Pipe[]) => {
+    // Bird position (center point)
+    const birdX = 100;
+    const birdSize = 20; // Smaller collision box than visual size
+
+    for (const pipe of pipes) {
+      // Only check pipes that are near the bird
+      if (pipe.x > 150 || pipe.x < 0) continue;
+
+      // Check if bird is between pipes horizontally
+      if (pipe.x < birdX + birdSize && pipe.x + 52 > birdX - birdSize) {
+        // Check if bird hits top pipe
+        if (birdY < pipe.height) {
+          return true;
+        }
+        // Check if bird hits bottom pipe
+        if (birdY > pipe.height + PIPE_GAP - birdSize) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  const gameLoop = (timestamp: number) => {
+    if (!gameStarted || gameOver) {
+      return;
+    }
+
+    // Update bird position
+    setBird((prev) => ({
+      ...prev,
+      y: prev.y + prev.velocity,
+      velocity: prev.velocity + GRAVITY,
+    }));
+
+    // Check for collisions
+    const hasCollision = checkCollision(bird.y, pipes);
+    const isOutOfBounds = bird.y < 0 || bird.y > 576;
+
+    if (hasCollision || isOutOfBounds) {
+      console.log("Collision detected!", {
+        hasCollision,
+        isOutOfBounds,
+        birdY: bird.y,
+        pipes,
+      });
+      setGameOver(true);
+      if (gameLoopRef.current) {
+        cancelAnimationFrame(gameLoopRef.current);
+      }
+      return;
+    }
+
+    // Spawn new pipes
+    if (timestamp - lastPipeSpawnRef.current >= PIPE_SPAWN_INTERVAL) {
+      spawnPipe();
+      lastPipeSpawnRef.current = timestamp;
+    }
+
+    // Update pipes position and check for score
+    setPipes((prev) =>
+      prev
+        .map((pipe) => {
+          const newX = pipe.x - PIPE_SPEED;
+          if (!pipe.passed && newX + 26 < 100) {
+            setScore((s) => s + 0.5);
+            return { ...pipe, x: newX, passed: true };
+          }
+          return { ...pipe, x: newX };
+        })
+        .filter((pipe) => pipe.x > -60)
+    );
+
+    gameLoopRef.current = requestAnimationFrame(gameLoop);
+  };
+
+  const resetGame = () => {
+    console.log("Resetting game");
+    setBird({ y: 250, velocity: 0 });
+    setPipes([]);
+    setScore(0);
+    setGameOver(false);
+    setGameStarted(false);
+    lastPipeSpawnRef.current = 0;
+    if (gameLoopRef.current) {
+      cancelAnimationFrame(gameLoopRef.current);
+      gameLoopRef.current = undefined;
+    }
+  };
+
+  useEffect(() => {
+    if (gameStarted && !gameOver) {
+      gameLoopRef.current = requestAnimationFrame(gameLoop);
+    }
+    return () => {
+      if (gameLoopRef.current) {
+        cancelAnimationFrame(gameLoopRef.current);
+      }
+    };
+  }, [gameStarted, gameOver]);
+
+  const renderGame = () => {
+    const ctx = canvasRef.current?.getContext("2d");
+    if (!ctx) return;
+
+    // Clear canvas
+    ctx.clearRect(0, 0, 800, 600);
+
+    // Draw background
+    const bgImg = new Image();
+    bgImg.src = "/flappy_bird/sprites/background-day.png";
+    ctx.drawImage(bgImg, 0, 0, 800, 600);
+
+    // Draw pipes
+    const pipeImg = new Image();
+    pipeImg.src = "/flappy_bird/sprites/pipe-green.png";
+    pipes.forEach((pipe) => {
+      // Draw top pipe
+      ctx.save();
+      ctx.translate(pipe.x + 26, pipe.height);
+      ctx.rotate(Math.PI);
+      ctx.drawImage(pipeImg, -26, 0, 52, 320);
+      ctx.restore();
+
+      // Draw bottom pipe
+      ctx.drawImage(pipeImg, pipe.x, pipe.height + PIPE_GAP, 52, 320);
+    });
+
+    // Draw bird
+    const birdImg = new Image();
+    birdImg.src = "/flappy_bird/sprites/bluebird-midflap.png";
+    ctx.drawImage(birdImg, 100, bird.y, 34, 24);
+
+    // Draw score
+    ctx.fillStyle = "white";
+    ctx.font = "48px Arial";
+    ctx.fillText(score.toString(), 400, 50);
+
+    // Draw game over message
+    if (gameOver) {
+      const gameOverImg = new Image();
+      gameOverImg.src = "/flappy_bird/sprites/gameover.png";
+      ctx.drawImage(gameOverImg, 300, 200);
+    }
+
+    requestAnimationFrame(renderGame);
+  };
+
+  useEffect(() => {
+    renderGame();
+  }, [bird, pipes, gameOver, score]);
+
   return (
     <div
-      className={`${geistSans.variable} ${geistMono.variable} grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]`}
+      className={styles.container}
+      onClick={() => {
+        if (gameOver) {
+          resetGame();
+        } else {
+          jump();
+        }
+      }}
     >
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              src/pages/index.tsx
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
-
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+      <canvas
+        ref={canvasRef}
+        width={800}
+        height={600}
+        className={styles.canvas}
+      />
+      {!gameStarted && !gameOver && (
+        <div className={styles.startMessage}>Click to Start</div>
+      )}
     </div>
   );
-}
+};
+
+export default FlappyBird;
